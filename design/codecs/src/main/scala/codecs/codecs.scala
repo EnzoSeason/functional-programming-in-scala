@@ -181,13 +181,16 @@ trait DecoderInstances:
   Decoder.fromPartialFunction { case Json.Null => () }
 
   /** A decoder for `Int` values. Hint: use the `isValidInt` method of `BigDecimal`. */
-  // TODO Define a given value of type `Decoder[Int]`
+  given Decoder[Int] =
+  Decoder.fromPartialFunction { case Json.Num(n) if n.isValidInt => n.toInt }
 
   /** A decoder for `String` values */
-  // TODO Define a given value of type `Decoder[String]`
+  given Decoder[String] =
+  Decoder.fromPartialFunction { case Json.Str(s) => s }
 
   /** A decoder for `Boolean` values */
-  // TODO Define a given value of type `Decoder[Boolean]`
+  given Decoder[Boolean] =
+  Decoder.fromPartialFunction { case Json.Bool(b) => b }
 
   /**
     * A decoder for JSON arrays. It decodes each item of the array
@@ -196,7 +199,13 @@ trait DecoderInstances:
     */
   given[A](using decoder: Decoder[A]): Decoder[List[A]] =
   Decoder.fromFunction {
-    ???
+    case Json.Arr(arr) =>
+      val items = for {
+        element <- arr
+        item <- decoder.decode(element)
+      } yield item
+      Some(items)
+    case _ => Option.empty
   }
 
   /**
@@ -204,7 +213,13 @@ trait DecoderInstances:
     * the supplied `name` using the given `decoder`.
     */
   def field[A](name: String)(using decoder: Decoder[A]): Decoder[A] =
-    ???
+    Decoder.fromFunction {
+      case Json.Obj(obj) => obj.get(name) match {
+        case Some(value) => decoder.decode(value)
+        case None => None
+      }
+      case _ => None
+    }
 
 
 case class Person(name: String, age: Int)
