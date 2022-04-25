@@ -24,7 +24,7 @@ import Aliases.*
 case class Posting(postingType: Int, id: Int, acceptedAnswer: Option[Int], parentId: Option[QID], score: Int, tags: Option[String]) extends Serializable
 
 /** The main class */
-object StackOverflow extends StackOverflow:
+object StackOverflow extends StackOverflow :
 
   // Reduce Spark logging verbosity
   Logger.getLogger("org.apache.spark").setLevel(Level.ERROR)
@@ -38,20 +38,20 @@ object StackOverflow extends StackOverflow:
     val inputFileLocation: String = "/stackoverflow/stackoverflow-grading.csv"
     val resource = getClass.getResourceAsStream(inputFileLocation)
     val inputFile = Source.fromInputStream(resource)(Codec.UTF8)
- 
-    val lines   = sc.parallelize(inputFile.getLines().toList)
-    val raw     = rawPostings(lines)
-    val grouped = groupedPostings(raw)
-    val scored  = scoredPostings(grouped)
-    val vectors = vectorPostings(scored)
-//    assert(vectors.count() == 1042132, "Incorrect number of vectors: " + vectors.count())
 
-    val means   = kmeans(sampleVectors(vectors), vectors, debug = true)
+    val lines = sc.parallelize(inputFile.getLines().toList)
+    val raw = rawPostings(lines)
+    val grouped = groupedPostings(raw)
+    val scored = scoredPostings(grouped)
+    val vectors = vectorPostings(scored)
+    //    assert(vectors.count() == 1042132, "Incorrect number of vectors: " + vectors.count())
+
+    val means = kmeans(sampleVectors(vectors), vectors, debug = true)
     val results = clusterResults(means, vectors)
     printResults(results)
 
 /** The parsing and kmeans methods */
-class StackOverflow extends StackOverflowInterface with Serializable:
+class StackOverflow extends StackOverflowInterface with Serializable :
 
   /** Languages */
   val langs =
@@ -61,6 +61,7 @@ class StackOverflow extends StackOverflowInterface with Serializable:
 
   /** K-means parameter: How "far apart" languages should be for the kmeans algorithm? */
   def langSpread = 50000
+
   assert(langSpread > 0, "If langSpread is zero we can't recover the language from the input data!")
 
   /** K-means parameter: Number of clusters */
@@ -83,18 +84,22 @@ class StackOverflow extends StackOverflowInterface with Serializable:
   def rawPostings(lines: RDD[String]): RDD[Posting] =
     lines.map(line => {
       val arr = line.split(",")
-      Posting(postingType =    arr(0).toInt,
-              id =             arr(1).toInt,
-              acceptedAnswer = if arr(2) == "" then None else Some(arr(2).toInt),
-              parentId =       if arr(3) == "" then None else Some(arr(3).toInt),
-              score =          arr(4).toInt,
-              tags =           if arr.length >= 6 then Some(arr(5).intern()) else None)
+      Posting(postingType = arr(0).toInt,
+        id = arr(1).toInt,
+        acceptedAnswer = if arr(2) == "" then None else Some(arr(2).toInt),
+        parentId = if arr(3) == "" then None else Some(arr(3).toInt),
+        score = arr(4).toInt,
+        tags = if arr.length >= 6 then Some(arr(5).intern()) else None)
     })
 
 
   /** Group the questions and answers together */
-  def groupedPostings(postings: RDD[Posting]): RDD[(QID, Iterable[(Question, Answer)])] =
-    ???
+  def groupedPostings(postings: RDD[Posting]): RDD[(QID, Iterable[(Question, Answer)])] = {
+    val posts = postings.persist()
+    val questions = posts.filter(_.postingType == 1).map(post => (post.id, post))
+    val answers = posts.filter(_.postingType == 2).map(post => (post.parentId.get, post))
+    questions.join(answers).groupByKey()
+  }
 
 
   /** Compute the maximum score for each posting */
@@ -110,7 +115,7 @@ class StackOverflow extends StackOverflowInterface with Serializable:
         i += 1
       highScore
 
-    ???
+    grouped.map(posts => (posts._2.head._1, answerHighScore(posts._2.map(_._2).toArray)))
 
 
   /** Compute the vectors for the kmeans */
@@ -123,7 +128,7 @@ class StackOverflow extends StackOverflowInterface with Serializable:
           val index = ls.indexOf(lang)
           if (index >= 0) Some(index) else None
 
-    ???
+    scored.map(pair => (firstLangInTag(pair._1.tags, langs).getOrElse(-1) * langSpread, pair._2)).filter(_._1 >= 0)
 
 
   /** Sample the vectors */
@@ -153,10 +158,10 @@ class StackOverflow extends StackOverflowInterface with Serializable:
 
     val res =
       if langSpread < 500 then
-        // sample the space regardless of the language
+      // sample the space regardless of the language
         vectors.distinct.takeSample(false, kmeansKernels, 42)
       else
-        // sample the space uniformly from each language partition
+      // sample the space uniformly from each language partition
         vectors.groupByKey().flatMap(
           (lang, vectors) => reservoirSampling(lang, vectors.iterator.distinct, perLang).map((lang, _))
         ).collect()
@@ -176,18 +181,23 @@ class StackOverflow extends StackOverflowInterface with Serializable:
     // TODO: Compute the groups of points that are the closest to each mean,
     // and then compute the new means of each group of points. Finally, compute
     // a Map that associate the old `means` values to their new values
-    val newMeansMap: scala.collection.Map[(Int, Int), (Int, Int)] = ???
+    val newMeansMap: scala.collection.Map[(Int, Int), (Int, Int)] = vectors
+      .map(v => (findClosest(v, means), v))
+      .groupByKey()
+      .mapValues(averageVectors(_))
+      .collect().toMap
     val newMeans: Array[(Int, Int)] = means.map(oldMean => newMeansMap(oldMean))
     val distance = euclideanDistance(means, newMeans)
 
     if debug then
-      println(s"""Iteration: $iter
-                 |  * current distance: $distance
-                 |  * desired distance: $kmeansEta
-                 |  * means:""".stripMargin)
+      println(
+        s"""Iteration: $iter
+           |  * current distance: $distance
+           |  * desired distance: $kmeansEta
+           |  * means:""".stripMargin)
       for idx <- 0 until kmeansKernels do
-      println(f"   ${means(idx).toString}%20s ==> ${newMeans(idx).toString}%20s  " +
-              f"  distance: ${euclideanDistance(means(idx), newMeans(idx))}%8.0f")
+        println(f"   ${means(idx).toString}%20s ==> ${newMeans(idx).toString}%20s  " +
+          f"  distance: ${euclideanDistance(means(idx), newMeans(idx))}%8.0f")
 
     if converged(distance) then
       newMeans
@@ -254,8 +264,6 @@ class StackOverflow extends StackOverflowInterface with Serializable:
     ((comp1 / count).toInt, (comp2 / count).toInt)
 
 
-
-
   //
   //
   //  Displaying results:
@@ -266,10 +274,22 @@ class StackOverflow extends StackOverflowInterface with Serializable:
     val closestGrouped = closest.groupByKey()
 
     val median = closestGrouped.mapValues { vs =>
-      val langLabel: String   = ??? // most common language in the cluster
-      val langPercent: Double = ??? // percent of the questions in the most common language
-      val clusterSize: Int    = ???
-      val medianScore: Int    = ???
+      // The pair of most common language in the cluster
+      // The pair is (langIndex, count).
+      val mostLang = vs
+        .groupBy(_._1)
+        .map(pair => (pair._1, pair._2.size))
+        .maxBy(_._2)
+      val langLabel: String = langs(mostLang._1 / langSpread) // most common language in the cluster
+
+      val langPercent: Double = (mostLang._2 / vs.size.toDouble) * 100.0 // percent of the questions in the most common language
+
+      val clusterSize: Int = vs.size
+
+      val scores = vs.map(_._2).toList.sorted
+      val medianScore: Int =
+        if (clusterSize % 2 == 0) (scores(clusterSize / 2) + scores(clusterSize / 2 - 1)) / 2
+        else scores(clusterSize / 2)
 
       (langLabel, langPercent, clusterSize, medianScore)
     }
