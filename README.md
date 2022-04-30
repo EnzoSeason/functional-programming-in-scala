@@ -4,6 +4,7 @@ It contains the assignments of [Functional Programming in Scala Specialization](
 
 - [Functional Programming Principles in Scala](./principles)
 - [Functional Program Design in Scala](./design)
+- [Big Data Analysis with Scala and Spark](./big-data-spark/)
 
 ## How to play
 
